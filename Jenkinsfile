@@ -19,12 +19,6 @@ pipeline {
         )
     }
 
-    environment {
-        ENV_LOWER    = "${params.ENVIRONMENT?.toLowerCase() ?: 'dev'}"
-        TF_VAR_FILE  = "envs/${params.ENVIRONMENT?.toLowerCase() ?: 'dev'}.tfvars"
-        TF_WORKSPACE = "${params.ENVIRONMENT?.toLowerCase() ?: 'dev'}"
-    }
-
     stages {
 
         // ─────────────────────────────────────────
@@ -32,7 +26,16 @@ pipeline {
         // ─────────────────────────────────────────
         stage('Checkout') {
             steps {
-                echo "📦 Checking out branch: ${params.BRANCH} for ENV: ${params.ENVIRONMENT}"
+                script {
+                    // ✅ FIX 1: env vars with params resolved INSIDE script block
+                    //    not in top-level environment{} block — params are null
+                    //    on first run when evaluated at pipeline load time
+                    env.ENV_LOWER    = params.ENVIRONMENT.toLowerCase()
+                    env.TF_VAR_FILE  = "envs/${env.ENV_LOWER}.tfvars"
+                    env.TF_WORKSPACE = env.ENV_LOWER
+
+                    echo "📦 Checking out branch: ${params.BRANCH} | ENV: ${params.ENVIRONMENT}"
+                }
                 checkout scmGit(
                     branches: [[name: "*/${params.BRANCH}"]],
                     extensions: [],
@@ -52,12 +55,17 @@ pipeline {
                     echo "⚙️ Initialising Terraform — ENV: ${params.ENVIRONMENT}"
                     sh "terraform init -reconfigure"
 
-                    // Create or select workspace per environment
-                    sh """
-                        terraform workspace select ${TF_WORKSPACE} || \
-                        terraform workspace new    ${TF_WORKSPACE}
-                    """
-                    echo "✅ Workspace set to: ${TF_WORKSPACE}"
+                    // ✅ FIX 2: workspace select/new split into two safe sh calls
+                    //    using returnStatus to avoid pipeline abort on non-zero exit
+                    def wsExists = sh(
+                        script: "terraform workspace select ${env.TF_WORKSPACE}",
+                        returnStatus: true
+                    )
+                    if (wsExists != 0) {
+                        sh "terraform workspace new ${env.TF_WORKSPACE}"
+                    }
+
+                    echo "✅ Workspace set to: ${env.TF_WORKSPACE}"
                 }
             }
         }
@@ -68,8 +76,10 @@ pipeline {
         stage('Action') {
             steps {
                 script {
-                    def varFile = "-var-file=${TF_VAR_FILE}"
-                    def envVar  = "-var='environment=${ENV_LOWER}'"
+                    // ✅ FIX 3: envVar uses double quotes not single quotes
+                    //    single quotes inside sh string causes shell parsing issues
+                    def varFile = "-var-file=${env.TF_VAR_FILE}"
+                    def envVar  = "-var=\"environment=${env.ENV_LOWER}\""
 
                     switch (params.ACTION) {
 
@@ -79,19 +89,21 @@ pipeline {
                             break
 
                         case 'apply':
-                            // Manual approval for UAT and PROD
                             if (params.ENVIRONMENT in ['UAT', 'PROD']) {
-                                input message: "⚠️ Confirm APPLY to ${params.ENVIRONMENT} from branch '${params.BRANCH}'?",
-                                      ok: "Yes, Apply"
+                                input(
+                                    message: "⚠️ Confirm APPLY to ${params.ENVIRONMENT} from branch '${params.BRANCH}'?",
+                                    ok: "Yes, Apply"
+                                )
                             }
                             echo "🚀 Running Apply — ENV: ${params.ENVIRONMENT} | BRANCH: ${params.BRANCH}"
                             sh "terraform apply --auto-approve ${varFile} ${envVar}"
                             break
 
                         case 'destroy':
-                            // Strict manual approval for ALL environments
-                            input message: "🔴 DANGER: Confirm DESTROY on ${params.ENVIRONMENT} from branch '${params.BRANCH}'?",
-                                  ok: "Yes, Destroy"
+                            input(
+                                message: "🔴 DANGER: Confirm DESTROY on ${params.ENVIRONMENT} from branch '${params.BRANCH}'?",
+                                ok: "Yes, Destroy"
+                            )
                             echo "💣 Running Destroy — ENV: ${params.ENVIRONMENT} | BRANCH: ${params.BRANCH}"
                             sh "terraform destroy --auto-approve ${varFile} ${envVar}"
                             break
@@ -115,8 +127,8 @@ pipeline {
             ENV      : ${params.ENVIRONMENT}
             ACTION   : ${params.ACTION}
             BRANCH   : ${params.BRANCH}
-            WORKSPACE: ${TF_WORKSPACE}
-            TFVARS   : ${TF_VAR_FILE}
+            WORKSPACE: ${env.TF_WORKSPACE}
+            TFVARS   : ${env.TF_VAR_FILE}
             ───────────────────────────
             """
         }
@@ -127,7 +139,7 @@ pipeline {
             ENV      : ${params.ENVIRONMENT}
             ACTION   : ${params.ACTION}
             BRANCH   : ${params.BRANCH}
-            WORKSPACE: ${TF_WORKSPACE}
+            WORKSPACE: ${env.TF_WORKSPACE ?: 'N/A'}
             ───────────────────────────
             """
         }
