@@ -1,5 +1,6 @@
 pipeline {
     agent any
+
     parameters {
         choice(
             name: 'ENVIRONMENT',
@@ -11,22 +12,56 @@ pipeline {
             choices: ['plan', 'apply'],
             description: 'Select the action to perform'
         )
-        string(
-            name: 'BRANCH',
-            defaultValue: 'main',
-            description: 'Enter the branch name to checkout'
-        )
     }
+
     environment {
-        TF_VAR_FILE = "${params.ENVIRONMENT?.toLowerCase() ?: 'dev'}.tfvars"
+        TF_VAR_FILE    = "${params.ENVIRONMENT?.toLowerCase() ?: 'dev'}.tfvars"
+        REPO_URL       = 'https://github.com/omkardvd/Terraform-Automation.git'
+        GITHUB_API_URL = 'https://api.github.com/repos/omkardvd/Terraform-Automation/branches'
     }
+
     stages {
+
+        stage('Fetch & Select Branch') {
+            steps {
+                script {
+                    // ── Fetch branches from GitHub API ──────────────────────────
+                    def response = sh(
+                        script: """
+                            curl -s ${GITHUB_API_URL} \
+                                 -H "Accept: application/vnd.github.v3+json"
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    // ── Parse branch names from JSON ─────────────────────────────
+                    def branches = readJSON(text: response).collect { it.name }
+                    echo "Available branches: ${branches}"
+
+                    // ── Prompt user to pick a branch ─────────────────────────────
+                    def selectedBranch = input(
+                        message: 'Select the branch to deploy',
+                        parameters: [
+                            choice(
+                                name: 'BRANCH',
+                                choices: branches,
+                                description: 'Available branches from GitHub'
+                            )
+                        ]
+                    )
+
+                    env.SELECTED_BRANCH = selectedBranch
+                    echo "Selected branch: ${env.SELECTED_BRANCH}"
+                }
+            }
+        }
+
         stage('Checkout') {
             steps {
                 checkout scmGit(
-                    branches: [[name: "*/${params.BRANCH}"]],
+                    branches: [[name: "*/${env.SELECTED_BRANCH}"]],
                     extensions: [],
-                    userRemoteConfigs: [[url: 'https://github.com/omkardvd/Terraform-Automation.git']]
+                    userRemoteConfigs: [[url: "${REPO_URL}"]]
                 )
             }
         }
@@ -44,16 +79,18 @@ pipeline {
 
                     switch (params.ACTION) {
                         case 'plan':
-                            echo "Executing Plan for ${params.ENVIRONMENT}..."
+                            echo "Executing Plan for ${params.ENVIRONMENT} on branch ${env.SELECTED_BRANCH}..."
                             sh "terraform plan ${varFile}"
                             break
+
                         case 'apply':
                             if (params.ENVIRONMENT == 'PROD') {
-                                input message: "Are you sure you want to apply changes to PROD?", ok: "Yes, Apply"
+                                input message: "⚠️ Apply changes to PROD from branch '${env.SELECTED_BRANCH}'?", ok: "Yes, Apply"
                             }
-                            echo "Executing Apply for ${params.ENVIRONMENT}..."
+                            echo "Executing Apply for ${params.ENVIRONMENT} on branch ${env.SELECTED_BRANCH}..."
                             sh "terraform apply --auto-approve ${varFile}"
                             break
+
                         default:
                             error 'Unknown action'
                     }
@@ -64,10 +101,10 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline completed successfully for ${params.ENVIRONMENT} - ${params.ACTION}"
+            echo "✅ Pipeline completed — ENV: ${params.ENVIRONMENT} | ACTION: ${params.ACTION} | BRANCH: ${env.SELECTED_BRANCH}"
         }
         failure {
-            echo "Pipeline failed for ${params.ENVIRONMENT} - ${params.ACTION}"
+            echo "❌ Pipeline failed — ENV: ${params.ENVIRONMENT} | ACTION: ${params.ACTION} | BRANCH: ${env.SELECTED_BRANCH}"
         }
     }
 }
