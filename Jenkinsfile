@@ -4,6 +4,7 @@ pipeline {
     parameters {
         choice(name: 'ENV', choices: ['DEV', 'UAT', 'PROD'], description: 'Select Environment')
         choice(name: 'ACTION', choices: ['plan', 'apply'], description: 'Terraform Action')
+        string(name: 'BRANCH',defaultValue: 'main',description: 'Enter the branch name to checkout')
     }
 
     environment {
