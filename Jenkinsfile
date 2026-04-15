@@ -1,40 +1,47 @@
 pipeline {
     agent any
 
+    parameters {
+        choice(name: 'ENV', choices: ['DEV', 'UAT', 'PROD'], description: 'Select Environment')
+        choice(name: 'ACTION', choices: ['plan', 'apply'], description: 'Terraform Action')
+    }
+
     environment {
-        ENV = "DEV"
-        TF_WORKSPACE = "dev"
+        TF_WORKSPACE = "${params.ENV.toLowerCase()}"
     }
 
     stages {
 
         stage('Checkout') {
             steps {
-                echo "📦 Checking out branch: main | ENV: ${ENV}"
+                echo "📦 Checking out branch: main | ENV: ${params.ENV}"
                 git branch: 'main', url: 'https://github.com/omkardvd/Terraform-Automation.git'
             }
         }
 
         stage('Terraform Init') {
             steps {
-                echo "⚙️ Initialising Terraform — ENV: ${ENV}"
+                echo "⚙️ Initialising Terraform — ENV: ${params.ENV}"
                 sh 'terraform init -reconfigure'
             }
         }
 
         stage('Terraform Plan') {
+            when {
+                expression { params.ACTION == 'plan' }
+            }
             steps {
-                echo "📊 Running Terraform Plan"
+                echo "📊 Running Terraform Plan for ${params.ENV}"
                 sh 'terraform plan'
             }
         }
 
         stage('Terraform Apply') {
             when {
-                expression { return params.ACTION == 'apply' }
+                expression { params.ACTION == 'apply' }
             }
             steps {
-                echo "🚀 Applying Terraform changes"
+                echo "🚀 Applying Terraform for ${params.ENV}"
                 sh 'terraform apply -auto-approve'
             }
         }
@@ -45,7 +52,8 @@ pipeline {
             echo """
             ✅ Pipeline SUCCESS
             ───────────────────────────
-            ENV      : ${ENV}
+            ENV      : ${params.ENV}
+            ACTION   : ${params.ACTION}
             WORKSPACE: ${TF_WORKSPACE}
             ───────────────────────────
             """
@@ -54,7 +62,8 @@ pipeline {
             echo """
             ❌ Pipeline FAILED
             ───────────────────────────
-            ENV      : ${ENV}
+            ENV      : ${params.ENV}
+            ACTION   : ${params.ACTION}
             WORKSPACE: ${TF_WORKSPACE}
             ───────────────────────────
             """
